@@ -1,0 +1,1 @@
+/Users/nouman/Development/image_saver_plugin/vision_gallery_saver/example/build/app/intermediates/cxx/Debug/466o3n2b/obj/x86_64
