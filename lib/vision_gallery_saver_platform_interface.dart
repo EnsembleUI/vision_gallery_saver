@@ -9,7 +9,8 @@ abstract class VisionGallerySaverPlatform extends PlatformInterface {
 
   static final Object _token = Object();
 
-  static VisionGallerySaverPlatform _instance = MethodChannelVisionGallerySaver();
+  static VisionGallerySaverPlatform _instance =
+      MethodChannelVisionGallerySaver();
 
   /// The default instance of [VisionGallerySaverPlatform] to use.
   ///

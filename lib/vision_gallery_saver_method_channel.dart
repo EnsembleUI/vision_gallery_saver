@@ -11,7 +11,8 @@ class MethodChannelVisionGallerySaver extends VisionGallerySaverPlatform {
 
   @override
   Future<String?> getPlatformVersion() async {
-    final version = await methodChannel.invokeMethod<String>('getPlatformVersion');
+    final version =
+        await methodChannel.invokeMethod<String>('getPlatformVersion');
     return version;
   }
 
@@ -44,5 +45,4 @@ class MethodChannelVisionGallerySaver extends VisionGallerySaverPlatform {
     });
     return Map<String, dynamic>.from(result);
   }
-  
 }

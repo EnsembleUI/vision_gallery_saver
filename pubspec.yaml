@@ -1,7 +1,7 @@
 name: vision_gallery_saver
 description: "A Flutter plugin to save images and videos to the gallery on iOS and Android. Save images from widgets, network, and files."
 version: 1.0.0
-
+homepage: https://github.com/TheNoumanDev/vision_gallery_saver
 repository: https://github.com/TheNoumanDev/vision_gallery_saver
 issue_tracker: https://github.com/TheNoumanDev/vision_gallery_saver/issues
 

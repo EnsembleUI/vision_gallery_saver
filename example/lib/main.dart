@@ -33,7 +33,7 @@ class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key});
 
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  State<MyHomePage> createState() => _MyHomePageState();
 }
 
 class _MyHomePageState extends State<MyHomePage> {
@@ -48,37 +48,32 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _showSaveResult(Map<dynamic, dynamic> result) {
     debugPrint('Save result received: $result');
-    String message = '';
-    
+
     if (result['isSuccess']) {
-      message = 'File saved successfully!\n';
-      
       String? filePath = result['filePath'];
       debugPrint('File saved at path: $filePath');
-      
+
       if (filePath != null && filePath.isNotEmpty) {
-        _lastSavedPath = filePath;
-        message += '\nFile location:\n$filePath';
-        
+        setState(() {
+          _lastSavedPath = filePath;
+        });
+
         if (Platform.isAndroid) {
           String galleryPath = '/storage/emulated/0/Pictures';
           debugPrint('Android gallery path: $galleryPath');
-          message += '\n\nCheck in gallery at:\n$galleryPath';
         }
-        
+
         if (Platform.isIOS) {
           debugPrint('File saved to iOS Photos app');
-          message += '\n\nThe file can be found in your Photos app';
         }
       }
     } else {
       debugPrint('Save failed: ${result['errorMessage']}');
-      message = 'Failed to save file: ${result['errorMessage'] ?? 'Unknown error'}';
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(result['isSuccess'] ? 'Saved successfully!' : 'Failed to save'))
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            result['isSuccess'] ? 'Saved successfully!' : 'Failed to save')));
   }
 
   _saveShieldImage() async {
@@ -87,22 +82,24 @@ class _MyHomePageState extends State<MyHomePage> {
       RenderRepaintBoundary boundary =
           _globalKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
       debugPrint('Got render boundary');
-      
+
       ui.Image image = await boundary.toImage();
       debugPrint('Converted boundary to image');
-      
+
       ByteData? byteData =
           await image.toByteData(format: ui.ImageByteFormat.png);
       debugPrint('Converted image to byte data. Null? ${byteData == null}');
-      
+
       if (byteData != null) {
-        final filename = "captain_america_shield_${DateTime.now().millisecondsSinceEpoch}";
+        final filename =
+            "captain_america_shield_${DateTime.now().millisecondsSinceEpoch}";
         debugPrint('Saving shield with filename: $filename');
-        
+
         final result = await VisionGallerySaver.saveImage(
           byteData.buffer.asUint8List(),
           quality: 100,
-          name: filename
+          name: filename,
+          isReturnImagePathOfIOS: true,
         );
         debugPrint('Shield save result: $result');
         _showSaveResult(result);
@@ -118,22 +115,21 @@ class _MyHomePageState extends State<MyHomePage> {
     debugPrint('Starting to download Iron Man image...');
     try {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Downloading Iron Man image..."))
-      );
-      
+          const SnackBar(content: Text("Downloading Iron Man image...")));
+
       debugPrint('Fetching from URL: https://i.imgur.com/XcDD7mg.jpeg');
-      var response = await Dio().get(
-          "https://i.imgur.com/XcDD7mg.jpeg",
+      var response = await Dio().get("https://i.imgur.com/XcDD7mg.jpeg",
           options: Options(responseType: ResponseType.bytes));
       debugPrint('Image downloaded, size: ${response.data.length} bytes');
-      
+
       final filename = "iron_man_${DateTime.now().millisecondsSinceEpoch}";
       debugPrint('Saving with filename: $filename');
-      
+
       final result = await VisionGallerySaver.saveImage(
         Uint8List.fromList(response.data),
         quality: 100,
-        name: filename
+        name: filename,
+        isReturnImagePathOfIOS: true,
       );
       debugPrint('Iron Man save result: $result');
       _showSaveResult(result);
@@ -148,23 +144,27 @@ class _MyHomePageState extends State<MyHomePage> {
     debugPrint('Starting to download Thor image...');
     try {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Downloading Thor image..."))
-      );
-      
+          const SnackBar(content: Text("Downloading Thor image...")));
+
       var appDocDir = await getTemporaryDirectory();
       String savePath = "${appDocDir.path}/thor.gif";
       debugPrint('Temporary save path: $savePath');
-      
+
       String fileUrl = "https://i.imgur.com/yeg063e.jpeg";
       debugPrint('Downloading from URL: $fileUrl');
-      
+
       await Dio().download(fileUrl, savePath);
       debugPrint('File downloaded to temp location');
-      
-      final result = await VisionGallerySaver.saveFile(savePath);
+
+      final filename = "thor_${DateTime.now().millisecondsSinceEpoch}";
+      final result = await VisionGallerySaver.saveFile(
+        savePath,
+        name: filename,
+        isReturnPathOfIOS: true,
+      );
       debugPrint('Thor save result: $result');
       _showSaveResult(result);
-      
+
       // Clean up temp file
       try {
         File(savePath).deleteSync();
@@ -183,17 +183,15 @@ class _MyHomePageState extends State<MyHomePage> {
     debugPrint('Starting to download Endgame trailer...');
     try {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Downloading Endgame trailer..."))
-      );
-      
+          const SnackBar(content: Text("Downloading Endgame trailer...")));
+
       var appDocDir = await getTemporaryDirectory();
       String savePath = "${appDocDir.path}/endgame.mp4";
       debugPrint('Temporary save path: $savePath');
-      
+
       String fileUrl = "https://i.imgur.com/68NpINq.mp4";
       debugPrint('Downloading from URL: $fileUrl');
-      
-      // Download without showing progress in UI
+
       await Dio().download(fileUrl, savePath, onReceiveProgress: (count, total) {
         if (total != -1) {
           final progress = (count / total * 100).toStringAsFixed(0);
@@ -201,11 +199,16 @@ class _MyHomePageState extends State<MyHomePage> {
         }
       });
       debugPrint('Video downloaded to temp location');
-      
-      final result = await VisionGallerySaver.saveFile(savePath);
+
+      final filename = "endgame_${DateTime.now().millisecondsSinceEpoch}";
+      final result = await VisionGallerySaver.saveFile(
+        savePath,
+        name: filename,
+        isReturnPathOfIOS: true,
+      );
       debugPrint('Endgame trailer save result: $result');
       _showSaveResult(result);
-      
+
       // Clean up temp file
       try {
         File(savePath).deleteSync();
