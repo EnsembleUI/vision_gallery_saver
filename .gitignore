@@ -40,6 +40,8 @@ example/build/
 example/.flutter-plugins
 example/.flutter-plugins-dependencies
 example/.packages
+example/.fvm
+example/.idea
 example/pubspec.lock
 example/.pub/
 example/*.iml

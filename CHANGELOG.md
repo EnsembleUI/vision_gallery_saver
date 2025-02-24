@@ -1,3 +1,10 @@
-## 0.0.1
+## 1.0.0
 
-* TODO: Describe initial release.
+* Initial release
+* Support for saving images from widgets
+* Support for saving network images
+* Support for saving video files
+* Custom quality settings
+* Custom file naming
+* iOS and Android platform support
+* Example app with Avengers theme
