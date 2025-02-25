@@ -1,6 +1,3 @@
-Here's the complete README.md file for your version 2.0.0 release:
-
-```markdown
 # vision_gallery_saver
 
 A Flutter plugin for saving images and videos to the gallery on iOS and Android platforms.
@@ -265,4 +262,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-```
