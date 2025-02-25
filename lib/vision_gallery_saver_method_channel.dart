@@ -22,14 +22,22 @@ class MethodChannelVisionGallerySaver extends VisionGallerySaverPlatform {
     int quality = 80,
     String? name,
     bool isReturnImagePathOfIOS = false,
+    bool skipIfExists = false,
+    String? androidRelativePath,
   }) async {
     final result = await methodChannel.invokeMethod('saveImageToGallery', {
       'imageBytes': imageBytes,
       'quality': quality,
       'name': name,
       'isReturnImagePathOfIOS': isReturnImagePathOfIOS,
+      'skipIfExists': skipIfExists,
+      'androidRelativePath': androidRelativePath,
     });
-    return Map<String, dynamic>.from(result);
+    return Map<String, dynamic>.from(result ??
+        {
+          'isSuccess': false,
+          'errorMessage': 'Unknown error occurred',
+        });
   }
 
   @override
@@ -37,12 +45,20 @@ class MethodChannelVisionGallerySaver extends VisionGallerySaverPlatform {
     String file, {
     String? name,
     bool isReturnPathOfIOS = false,
+    bool skipIfExists = false,
+    String? androidRelativePath,
   }) async {
     final result = await methodChannel.invokeMethod('saveFileToGallery', {
       'file': file,
       'name': name,
       'isReturnPathOfIOS': isReturnPathOfIOS,
+      'skipIfExists': skipIfExists,
+      'androidRelativePath': androidRelativePath,
     });
-    return Map<String, dynamic>.from(result);
+    return Map<String, dynamic>.from(result ??
+        {
+          'isSuccess': false,
+          'errorMessage': 'Unknown error occurred',
+        });
   }
 }

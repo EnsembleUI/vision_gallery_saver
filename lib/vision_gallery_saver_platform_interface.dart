@@ -29,19 +29,38 @@ abstract class VisionGallerySaverPlatform extends PlatformInterface {
     throw UnimplementedError('platformVersion() has not been implemented.');
   }
 
+  /// Save image to gallery
+  ///
+  /// [imageBytes] The image data to save
+  /// [quality] The image quality (1-100)
+  /// [name] Optional custom filename
+  /// [isReturnImagePathOfIOS] Whether to return the file path on iOS
+  /// [skipIfExists] Skip saving if file with same name exists
+  /// [androidRelativePath] Custom subfolder path for Android
   Future<Map<String, dynamic>> saveImage(
     Uint8List imageBytes, {
     int quality = 80,
     String? name,
     bool isReturnImagePathOfIOS = false,
+    bool skipIfExists = false,
+    String? androidRelativePath,
   }) {
     throw UnimplementedError('saveImage() has not been implemented.');
   }
 
+  /// Save file to gallery
+  ///
+  /// [file] Path to the file to save
+  /// [name] Optional custom filename
+  /// [isReturnPathOfIOS] Whether to return the file path on iOS
+  /// [skipIfExists] Skip saving if file with same name exists
+  /// [androidRelativePath] Custom subfolder path for Android
   Future<Map<String, dynamic>> saveFile(
     String file, {
     String? name,
     bool isReturnPathOfIOS = false,
+    bool skipIfExists = false,
+    String? androidRelativePath,
   }) {
     throw UnimplementedError('saveFile() has not been implemented.');
   }

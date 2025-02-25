@@ -9,11 +9,20 @@ import Photos
  * Handles image and video saving with proper permission management and error handling.
  */
 public class SwiftVisionGallerySaverPlugin: NSObject, FlutterPlugin {
-    /// Error message for permission-related issues
-    let errorMessage = "Vision's Analysis: Permission denied or restricted. Please check settings."
+    /// Error messages for various scenarios
+    private struct ErrorMessages {
+        static let permissionDenied = "Vision's Analysis: Permission denied or restricted. Please check settings."
+        static let invalidParameters = "Vision's Analysis: Invalid parameters"
+        static let unsupportedFileFormat = "Vision's Analysis: Unsupported file format"
+        static let saveFailure = "Vision's Analysis: Failed to save file"
+        static let fileTooLarge = "Vision's Analysis: File size exceeds limit"
+    }
+    
+    /// Maximum file size (100 MB)
+    private let maxFileSize: Int64 = 100 * 1024 * 1024
     
     /// FlutterResult callback holder
-    var result: FlutterResult?
+    private var result: FlutterResult?
 
     /// Register plugin with Flutter engine
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -31,212 +40,367 @@ public class SwiftVisionGallerySaverPlugin: NSObject, FlutterPlugin {
             result("iOS " + UIDevice.current.systemVersion)
             
         case "saveImageToGallery":
-            guard let arguments = call.arguments as? [String: Any],
-                  let imageData = (arguments["imageBytes"] as? FlutterStandardTypedData)?.data,
-                  let image = UIImage(data: imageData),
-                  let quality = arguments["quality"] as? Int,
-                  let isReturnImagePath = arguments["isReturnImagePathOfIOS"] as? Bool
-            else {
-                saveResult(isSuccess: false, error: "Vision's Analysis: Invalid parameters")
-                return
-            }
-            
-            let newImage = image.jpegData(compressionQuality: CGFloat(quality) / 100.0)!
-            saveImage(UIImage(data: newImage) ?? image, isReturnImagePath: isReturnImagePath)
+            handleImageSave(call)
             
         case "saveFileToGallery":
-            guard let arguments = call.arguments as? [String: Any],
-                  let path = arguments["file"] as? String,
-                  let isReturnFilePath = arguments["isReturnPathOfIOS"] as? Bool
-            else {
-                saveResult(isSuccess: false, error: "Vision's Analysis: Invalid parameters")
-                return
-            }
-            
-            if isImageFile(filename: path) {
-                saveImageAtFileUrl(path, isReturnImagePath: isReturnFilePath)
-            } else if UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(path) {
-                saveVideo(path, isReturnImagePath: isReturnFilePath)
-            } else {
-                saveResult(isSuccess: false, error: "Vision's Analysis: Unsupported file format")
-            }
+            handleFileSave(call)
             
         default:
             result(FlutterMethodNotImplemented)
         }
     }
     
-    /**
-     * Save video to photo library
-     * - Parameters:
-     *   - path: Path to the video file
-     *   - isReturnImagePath: Whether to return the saved file path
-     */
-    private func saveVideo(_ path: String, isReturnImagePath: Bool) {
-        if !isReturnImagePath {
-            UISaveVideoAtPathToSavedPhotosAlbum(path, self, #selector(didFinishSavingVideo), nil)
+    /// Handle image saving method
+    private func handleImageSave(_ call: FlutterMethodCall) {
+        guard let arguments = call.arguments as? [String: Any],
+              let imageData = (arguments["imageBytes"] as? FlutterStandardTypedData)?.data,
+              let image = UIImage(data: imageData),
+              let quality = arguments["quality"] as? Int,
+              let isReturnImagePath = arguments["isReturnImagePathOfIOS"] as? Bool
+        else {
+            saveResult(isSuccess: false, error: ErrorMessages.invalidParameters)
             return
         }
         
-        var videoIds: [String] = []
-        PHPhotoLibrary.shared().performChanges({
-            let request = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: URL(fileURLWithPath: path))
-            if let videoId = request?.placeholderForCreatedAsset?.localIdentifier {
-                videoIds.append(videoId)
+        let fileName = arguments["name"] as? String
+        let skipIfExists = arguments["skipIfExists"] as? Bool ?? false
+        
+        // Check authorization
+        requestPhotoLibraryAuthorization { authorized in
+            guard authorized else {
+                self.saveResult(isSuccess: false, error: ErrorMessages.permissionDenied)
+                return
             }
-        }, completionHandler: { [weak self] success, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                
-                if success && !videoIds.isEmpty {
-                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: videoIds, options: nil)
-                    if let videoAsset = assets.firstObject {
-                        PHImageManager().requestAVAsset(forVideo: videoAsset, options: nil) { avurlAsset, _, _ in
-                            if let urlAsset = avurlAsset as? AVURLAsset {
-                                self.saveResult(isSuccess: true, filePath: urlAsset.url.absoluteString)
-                            }
-                        }
-                    }
-                } else {
-                    self.saveResult(isSuccess: false, error: self.errorMessage)
+            
+            // Check if file exists before saving
+            if skipIfExists, let fileName = fileName {
+                let existingAsset = self.findExistingImageAsset(withName: fileName)
+                if let asset = existingAsset {
+                    self.handleExistingAsset(asset: asset)
+                    return
                 }
             }
-        })
+            
+            // Compress image based on quality
+            guard let compressedImageData = image.jpegData(compressionQuality: CGFloat(quality) / 100.0) else {
+                self.saveResult(isSuccess: false, error: ErrorMessages.saveFailure)
+                return
+            }
+            
+            self.saveImage(UIImage(data: compressedImageData) ?? image, 
+                           isReturnImagePath: isReturnImagePath, 
+                           fileName: fileName)
+        }
     }
     
-    /**
-     * Save image to photo library
-     * - Parameters:
-     *   - image: UIImage to save
-     *   - isReturnImagePath: Whether to return the saved file path
-     */
-    private func saveImage(_ image: UIImage, isReturnImagePath: Bool) {
-        if !isReturnImagePath {
-            UIImageWriteToSavedPhotosAlbum(image, self, #selector(didFinishSavingImage), nil)
+    /// Handle file saving method
+    private func handleFileSave(_ call: FlutterMethodCall) {
+        guard let arguments = call.arguments as? [String: Any],
+              let path = arguments["file"] as? String,
+              let isReturnFilePath = arguments["isReturnPathOfIOS"] as? Bool
+        else {
+            saveResult(isSuccess: false, error: ErrorMessages.invalidParameters)
             return
         }
         
-        var imageIds: [String] = []
+        let fileName = arguments["name"] as? String
+        let skipIfExists = arguments["skipIfExists"] as? Bool ?? false
+        
+        // Check authorization
+        requestPhotoLibraryAuthorization { authorized in
+            guard authorized else {
+                self.saveResult(isSuccess: false, error: ErrorMessages.permissionDenied)
+                return
+            }
+            
+            // Validate file size
+            guard self.isFileSizeValid(atPath: path) else {
+                self.saveResult(isSuccess: false, error: ErrorMessages.fileTooLarge)
+                return
+            }
+            
+            // Check if file exists before saving
+            if skipIfExists, let fileName = fileName {
+                let existingAsset = self.findExistingAsset(withName: fileName)
+                if let asset = existingAsset {
+                    self.handleExistingAsset(asset: asset)
+                    return
+                }
+            }
+            
+            // Determine file type and save accordingly
+            if self.isImageFile(filename: path) {
+                self.saveImageAtFileUrl(path, 
+                                        isReturnImagePath: isReturnFilePath, 
+                                        fileName: fileName)
+            } else if self.isVideoFile(path) {
+                self.saveVideo(path, 
+                               isReturnImagePath: isReturnFilePath, 
+                               fileName: fileName)
+            } else {
+                self.saveResult(isSuccess: false, 
+                                error: ErrorMessages.unsupportedFileFormat)
+            }
+        }
+    }
+    
+    /// Check file size
+    private func isFileSizeValid(atPath path: String) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileSize = attributes[.size] as? Int64 else {
+            return false
+        }
+        return fileSize <= maxFileSize
+    }
+    
+    /// Request photo library authorization
+    private func requestPhotoLibraryAuthorization(completion: @escaping (Bool) -> Void) {
+        PHPhotoLibrary.requestAuthorization { status in
+            DispatchQueue.main.async {
+                completion(status == .authorized)
+            }
+        }
+    }
+    
+    /// Handle existing asset when skipIfExists is true
+    private func handleExistingAsset(asset: PHAsset) {
+        let options = PHContentEditingInputRequestOptions()
+        options.canHandleAdjustmentData = { _ in true }
+        
+        asset.requestContentEditingInput(with: options) { [weak self] input, _ in
+            guard let self = self else { return }
+            
+            if let urlStr = input?.fullSizeImageURL?.absoluteString {
+                let result: [String: Any] = [
+                    "isSuccess": true,
+                    "foundExistingFile": true,
+                    "existingFilePath": urlStr,
+                    "filePath": nil,
+                    "errorMessage": nil
+                ]
+                self.result?(result)
+            } else {
+                self.saveResult(isSuccess: true, foundExistingFile: true)
+            }
+        }
+    }
+    
+    /// Find existing image asset
+    private func findExistingImageAsset(withName fileName: String) -> PHAsset? {
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.predicate = NSPredicate(format: "originalFilename CONTAINS[c] %@", fileName)
+        
+        let imageFetch = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        return imageFetch.firstObject
+    }
+    
+    /// Find existing asset (image or video)
+    private func findExistingAsset(withName fileName: String) -> PHAsset? {
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.predicate = NSPredicate(format: "originalFilename CONTAINS[c] %@", fileName)
+        
+        // First try to find an image
+        let imageFetch = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        if let imageAsset = imageFetch.firstObject {
+            return imageAsset
+        }
+        
+        // If no image found, try video
+        let videoFetch = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+        return videoFetch.firstObject
+    }
+    
+    /// Save image to photo library
+    private func saveImage(
+        _ image: UIImage, 
+        isReturnImagePath: Bool, 
+        fileName: String? = nil
+    ) {
         PHPhotoLibrary.shared().performChanges({
             let request = PHAssetChangeRequest.creationRequestForAsset(from: image)
-            if let imageId = request.placeholderForCreatedAsset?.localIdentifier {
-                imageIds.append(imageId)
+            
+            // Set filename if provided
+            if let fileName = fileName {
+                request.creationDate = Date()
+                request.location = nil
             }
-        }, completionHandler: { [weak self] success, error in
+        }) { [weak self] success, error in
+            guard let self = self else { return }
+            
             DispatchQueue.main.async {
-                guard let self = self else { return }
-                
-                if success && !imageIds.isEmpty {
-                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: imageIds, options: nil)
-                    if let imageAsset = assets.firstObject {
-                        let options = PHContentEditingInputRequestOptions()
-                        options.canHandleAdjustmentData = { _ in true }
-                        imageAsset.requestContentEditingInput(with: options) { [weak self] input, _ in
-                            guard let self = self else { return }
-                            if let urlStr = input?.fullSizeImageURL?.absoluteString {
-                                self.saveResult(isSuccess: true, filePath: urlStr)
-                            }
-                        }
+                if success {
+                    if isReturnImagePath {
+                        self.fetchAndReturnImagePath(image)
+                    } else {
+                        self.saveResult(isSuccess: true)
                     }
                 } else {
-                    self.saveResult(isSuccess: false, error: self.errorMessage)
+                    self.saveResult(
+                        isSuccess: false, 
+                        error: error?.localizedDescription ?? ErrorMessages.saveFailure
+                    )
                 }
             }
-        })
+        }
     }
     
-    /**
-     * Save image from file URL
-     * - Parameters:
-     *   - url: Path to the image file
-     *   - isReturnImagePath: Whether to return the saved file path
-     */
-    private func saveImageAtFileUrl(_ url: String, isReturnImagePath: Bool) {
-        if !isReturnImagePath {
-            if let image = UIImage(contentsOfFile: url) {
-                UIImageWriteToSavedPhotosAlbum(image, self, #selector(didFinishSavingImage), nil)
+    /// Fetch and return path for saved image
+    private func fetchAndReturnImagePath(_ image: UIImage) {
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        fetchOptions.fetchLimit = 1
+        
+        let imageFetch = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        
+        if let asset = imageFetch.firstObject {
+            let options = PHContentEditingInputRequestOptions()
+            options.canHandleAdjustmentData = { _ in true }
+            
+            asset.requestContentEditingInput(with: options) { [weak self] input, _ in
+                guard let self = self else { return }
+                
+                if let urlStr = input?.fullSizeImageURL?.absoluteString {
+                    self.saveResult(isSuccess: true, filePath: urlStr)
+                } else {
+                    self.saveResult(isSuccess: true)
+                }
             }
+        } else {
+            self.saveResult(isSuccess: true)
+        }
+    }
+    
+    /// Save video to photo library
+    private func saveVideo(
+        _ path: String, 
+        isReturnImagePath: Bool, 
+        fileName: String? = nil
+    ) {
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: URL(fileURLWithPath: path))
+        }) { [weak self] success, error in
+            guard let self = self else { return }
+            
+            DispatchQueue.main.async {
+                if success {
+                    if isReturnImagePath {
+                        self.fetchAndReturnVideoPath(path)
+                    } else {
+                        self.saveResult(isSuccess: true)
+                    }
+                } else {
+                    self.saveResult(
+                        isSuccess: false, 
+                        error: error?.localizedDescription ?? ErrorMessages.saveFailure
+                    )
+                }
+            }
+        }
+    }
+    
+    /// Fetch and return path for saved video
+    private func fetchAndReturnVideoPath(_ originalPath: String) {
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        fetchOptions.fetchLimit = 1
+        
+        let videoFetch = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+        
+        if let asset = videoFetch.firstObject {
+            let options = PHVideoRequestOptions()
+            options.version = .original
+            options.deliveryMode = .highQualityFormat
+            
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { [weak self] avAsset, _, _ in
+                guard let self = self else { return }
+                
+                if let urlAsset = avAsset as? AVURLAsset {
+                    self.saveResult(isSuccess: true, filePath: urlAsset.url.absoluteString)
+                } else {
+                    self.saveResult(isSuccess: true)
+                }
+            }
+        } else {
+            self.saveResult(isSuccess: true)
+        }
+    }
+    
+    /// Save image from file URL
+    private func saveImageAtFileUrl(
+        _ url: String, 
+        isReturnImagePath: Bool, 
+        fileName: String? = nil
+    ) {
+        guard let image = UIImage(contentsOfFile: url) else {
+            saveResult(isSuccess: false, error: ErrorMessages.saveFailure)
             return
         }
         
-        var imageIds: [String] = []
         PHPhotoLibrary.shared().performChanges({
-            let request = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: URL(string: url)!)
-            if let imageId = request?.placeholderForCreatedAsset?.localIdentifier {
-                imageIds.append(imageId)
+            let request = PHAssetChangeRequest.creationRequestForAsset(from: image)
+            
+            // Set filename if provided
+            if let fileName = fileName {
+                request.creationDate = Date()
+                request.location = nil
             }
-        }, completionHandler: { [weak self] success, error in
+        }) { [weak self] success, error in
+            guard let self = self else { return }
+            
             DispatchQueue.main.async {
-                guard let self = self else { return }
-                
-                if success && !imageIds.isEmpty {
-                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: imageIds, options: nil)
-                    if let imageAsset = assets.firstObject {
-                        let options = PHContentEditingInputRequestOptions()
-                        options.canHandleAdjustmentData = { _ in true }
-                        imageAsset.requestContentEditingInput(with: options) { [weak self] input, _ in
-                            guard let self = self else { return }
-                            if let urlStr = input?.fullSizeImageURL?.absoluteString {
-                                self.saveResult(isSuccess: true, filePath: urlStr)
-                            }
-                        }
+                if success {
+                    if isReturnImagePath {
+                        self.fetchAndReturnImagePath(image)
+                    } else {
+                        self.saveResult(isSuccess: true)
                     }
                 } else {
-                    self.saveResult(isSuccess: false, error: self.errorMessage)
+                    self.saveResult(
+                        isSuccess: false, 
+                        error: error?.localizedDescription ?? ErrorMessages.saveFailure
+                    )
                 }
             }
-        })
+        }
     }
     
-    /// Callback for video saving completion
-    @objc private func didFinishSavingVideo(_ videoPath: String, error: NSError?, contextInfo: UnsafeMutableRawPointer?) {
-        saveResult(isSuccess: error == nil, error: error?.localizedDescription)
+    /// Send result back to Flutter
+    private func saveResult(
+        isSuccess: Bool, 
+        filePath: String? = nil, 
+        error: String? = nil,
+        foundExistingFile: Bool = false,
+        existingFilePath: String? = nil
+    ) {
+        var resultDict: [String: Any] = [
+            "isSuccess": isSuccess,
+            "foundExistingFile": foundExistingFile
+        ]
+        
+        if let filePath = filePath {
+            resultDict["filePath"] = filePath
+        }
+        
+        if let existingFilePath = existingFilePath {
+            resultDict["existingFilePath"] = existingFilePath
+        }
+        
+        if let error = error {
+            resultDict["errorMessage"] = error
+        }
+        
+        result?(resultDict)
     }
     
-    /// Callback for image saving completion
-    @objc private func didFinishSavingImage(_ image: UIImage, error: NSError?, contextInfo: UnsafeMutableRawPointer?) {
-        saveResult(isSuccess: error == nil, error: error?.localizedDescription)
-    }
-    
-    /**
-     * Create and send result back to Flutter
-     * - Parameters:
-     *   - isSuccess: Whether the operation was successful
-     *   - error: Optional error message
-     *   - filePath: Optional file path
-     */
-    private func saveResult(isSuccess: Bool, error: String? = nil, filePath: String? = nil) {
-        var saveResult = SaveResultModel()
-        saveResult.isSuccess = isSuccess
-        saveResult.errorMessage = error
-        saveResult.filePath = filePath
-        result?(saveResult.toDictionary())
-    }
-    
-    /**
-     * Check if file is an image based on extension
-     * - Parameter filename: Name of the file
-     * - Returns: Boolean indicating if file is an image
-     */
+    /// Check if file is an image based on extension
     private func isImageFile(filename: String) -> Bool {
-        let imageExtensions = [".jpg", ".jpeg", ".png", ".gif", ".heic"]
+        let imageExtensions = [".jpg", ".jpeg", ".png", ".gif", ".heic", ".webp", ".tiff"]
         return imageExtensions.contains { filename.lowercased().hasSuffix($0) }
     }
-}
-
-/**
- * Model for operation results
- */
-struct SaveResultModel: Encodable {
-    var isSuccess: Bool = false
-    var filePath: String?
-    var errorMessage: String?
     
-    func toDictionary() -> [String: Any] {
-        return [
-            "isSuccess": isSuccess,
-            "filePath": filePath as Any,
-            "errorMessage": errorMessage as Any
-        ]
+    /// Check if file is a video based on extension
+    private func isVideoFile(_ path: String) -> Bool {
+        let videoExtensions = [".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"]
+        return videoExtensions.contains { path.lowercased().hasSuffix($0) }
     }
 }

@@ -1,12 +1,12 @@
 package com.thenoumandev.vision_gallery_saver
 
 import androidx.annotation.NonNull
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Environment
 import android.os.Build
@@ -19,8 +19,6 @@ import io.flutter.plugin.common.MethodChannel.Result
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
-import android.text.TextUtils
-import android.webkit.MimeTypeMap
 import java.io.OutputStream
 
 /**
@@ -46,10 +44,6 @@ class VisionGallerySaverPlugin : FlutterPlugin, MethodCallHandler {
 
     /**
      * Handles method calls from Flutter.
-     * Supports:
-     * - getPlatformVersion: Returns the Android version
-     * - saveImageToGallery: Saves image data as a file in the gallery
-     * - saveFileToGallery: Saves any file (video, gif, etc.) to the gallery
      */
     override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
         when (call.method) {
@@ -57,32 +51,64 @@ class VisionGallerySaverPlugin : FlutterPlugin, MethodCallHandler {
                 result.success("Android ${android.os.Build.VERSION.RELEASE}")
             }
             "saveImageToGallery" -> {
-                val image = call.argument<ByteArray>("imageBytes")
-                val quality = call.argument<Int>("quality")
-                val name = call.argument<String>("name")
-
-                result.success(
-                    saveImageToGallery(
-                        BitmapFactory.decodeByteArray(
-                            image ?: ByteArray(0),
-                            0,
-                            image?.size ?: 0
-                        ), quality, name
-                    )
-                )
+                handleSaveImageRequest(call, result)
             }
             "saveFileToGallery" -> {
-                val path = call.argument<String>("file")
-                val name = call.argument<String>("name")
-                result.success(saveFileToGallery(path, name))
+                handleSaveFileRequest(call, result)
             }
             else -> result.notImplemented()
         }
     }
 
     /**
+     * Handles saving image request from Flutter.
+     */
+    private fun handleSaveImageRequest(call: MethodCall, result: Result) {
+        val image = call.argument<ByteArray>("imageBytes")
+        val quality = call.argument<Int>("quality") ?: 80
+        val name = call.argument<String>("name")
+        val skipIfExists = call.argument<Boolean>("skipIfExists") ?: false
+        val androidRelativePath = call.argument<String>("androidRelativePath")
+
+        if (image == null) {
+            result.success(SaveResultModel(false, null, "Vision's analysis: Image data is missing").toHashMap())
+            return
+        }
+
+        try {
+            val bitmap = BitmapFactory.decodeByteArray(image, 0, image.size)
+            if (bitmap == null) {
+                result.success(SaveResultModel(false, null, "Vision's analysis: Failed to decode image").toHashMap())
+                return
+            }
+            
+            result.success(
+                saveImageToGallery(bitmap, quality, name, skipIfExists, androidRelativePath)
+            )
+        } catch (e: Exception) {
+            result.success(SaveResultModel(false, null, "Vision's analysis: ${e.message}").toHashMap())
+        }
+    }
+
+    /**
+     * Handles saving file request from Flutter.
+     */
+    private fun handleSaveFileRequest(call: MethodCall, result: Result) {
+        val path = call.argument<String>("file")
+        val name = call.argument<String>("name")
+        val skipIfExists = call.argument<Boolean>("skipIfExists") ?: false
+        val androidRelativePath = call.argument<String>("androidRelativePath")
+        
+        if (path == null) {
+            result.success(SaveResultModel(false, null, "Vision's analysis: File path is missing").toHashMap())
+            return
+        }
+        
+        result.success(saveFileToGallery(path, name, skipIfExists, androidRelativePath))
+    }
+
+    /**
      * Called when the plugin is destroyed.
-     * Cleans up resources and removes the method call handler.
      */
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
@@ -90,119 +116,118 @@ class VisionGallerySaverPlugin : FlutterPlugin, MethodCallHandler {
     }
 
     /**
-     * Generates a content URI for saving media files.
-     * Handles the different approaches required for Android Q (API 29) and above vs older versions.
-     * 
-     * @param extension The file extension (e.g., "jpg", "mp4")
-     * @param name Optional custom filename
-     * @return Uri? The generated URI where the file will be saved
+     * Finds an existing file in the gallery.
      */
-    private fun generateUri(extension: String = "", name: String? = null): Uri? {
-        var fileName = name ?: System.currentTimeMillis().toString()
-        val mimeType = getMIMEType(extension)
-        val isVideo = mimeType?.startsWith("video") == true
-
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10 (Q) and above: Use MediaStore
-            val uri = when {
+    private fun findExistingFile(
+        extension: String, 
+        fileName: String, 
+        customRelativePath: String?
+    ): SaveResultModel? {
+        val context = applicationContext ?: return null
+        val fullFileName = MediaStoreUtils.ensureExtension(fileName, extension)
+        
+        val mimeType = MediaStoreUtils.getMIMEType(extension)
+        val isVideo = MediaStoreUtils.isMediaType(mimeType, "video/")
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // For Android 10+, query the MediaStore
+            val contentUri = when {
                 isVideo -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
                 else -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             }
-
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(
-                    MediaStore.MediaColumns.RELATIVE_PATH, when {
-                        isVideo -> Environment.DIRECTORY_MOVIES
-                        else -> Environment.DIRECTORY_PICTURES
-                    }
-                )
-                if (!TextUtils.isEmpty(mimeType)) {
-                    put(
+            
+            val defaultDirectory = MediaStoreUtils.getDirectoryType(mimeType)
+            val relativePath = MediaStoreUtils.buildRelativePath(defaultDirectory, customRelativePath)
+            
+            val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATA)
+            val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
+            val selectionArgs = arrayOf("%$relativePath%", fullFileName)
+            
+            context.contentResolver.query(
+                contentUri,
+                projection,
+                selection,
+                selectionArgs,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    val dataColumn = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+                    val id = cursor.getLong(idColumn)
+                    val filePath = if (dataColumn != -1) cursor.getString(dataColumn) else null
+                    
+                    val contentUri = ContentUris.withAppendedId(
                         when {
-                            isVideo -> MediaStore.Video.Media.MIME_TYPE
-                            else -> MediaStore.Images.Media.MIME_TYPE
-                        }, mimeType
+                            isVideo -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                            else -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        },
+                        id
+                    )
+
+                    return SaveResultModel(
+                        isSuccess = true, 
+                        filePath = contentUri.toString(), 
+                        errorMessage = null, 
+                        foundExistingFile = true,
+                        existingFilePath = filePath ?: contentUri.toString()
                     )
                 }
             }
-
-            applicationContext?.contentResolver?.insert(uri, values)
         } else {
-            // Below Android 10: Use file system directly
-            val storePath = Environment.getExternalStoragePublicDirectory(
-                when {
-                    isVideo -> Environment.DIRECTORY_MOVIES
-                    else -> Environment.DIRECTORY_PICTURES
-                }
-            ).absolutePath
-            val appDir = File(storePath).apply {
-                if (!exists()) {
-                    mkdir()
-                }
+            // For older Android versions, check the file system directly
+            val directoryType = MediaStoreUtils.getDirectoryType(mimeType)
+            val storePath = Environment.getExternalStoragePublicDirectory(directoryType).absolutePath
+            
+            // Create path with custom subfolder if specified
+            val baseDir = if (customRelativePath.isNullOrEmpty()) {
+                File(storePath)
+            } else {
+                File(storePath, customRelativePath)
             }
-
-            val file = File(appDir, if (extension.isNotEmpty()) "$fileName.$extension" else fileName)
-            Uri.fromFile(file)
+            
+            val file = File(baseDir, fullFileName)
+            if (file.exists()) {
+                return SaveResultModel(
+                    isSuccess = true, 
+                    filePath = file.absolutePath, 
+                    errorMessage = null, 
+                    foundExistingFile = true,
+                    existingFilePath = file.absolutePath
+                )
+            }
         }
-    }
-
-    /**
-     * Determines the MIME type from a file extension.
-     * 
-     * @param extension The file extension to check
-     * @return String? The MIME type, or null if unknown
-     */
-    private fun getMIMEType(extension: String): String? {
-        return if (!TextUtils.isEmpty(extension)) {
-            MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase())
-        } else {
-            null
-        }
-    }
-
-    /**
-     * Notifies the system that a new media file has been added.
-     * Required for Android versions below Q to make files visible in gallery apps.
-     * 
-     * @param context The application context
-     * @param fileUri The URI of the saved file
-     */
-    private fun sendBroadcast(context: Context, fileUri: Uri?) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-            mediaScanIntent.data = fileUri
-            context.sendBroadcast(mediaScanIntent)
-        }
+        
+        return null
     }
 
     /**
      * Saves an image to the gallery.
-     * Handles compression and quality settings for JPEG images.
-     * 
-     * @param bmp The bitmap to save
-     * @param quality The JPEG compression quality (1-100)
-     * @param name Optional custom filename
-     * @return HashMap<String, Any?> Result containing success status, file path, and any error message
      */
     private fun saveImageToGallery(
-        bmp: Bitmap?,
-        quality: Int?,
-        name: String?
+        bmp: Bitmap,
+        quality: Int,
+        name: String?,
+        skipIfExists: Boolean,
+        customRelativePath: String?
     ): HashMap<String, Any?> {
-        if (bmp == null || quality == null) {
-            return SaveResultModel(false, null, "Vision's analysis: Parameters missing").toHashMap()
-        }
-
         val context = applicationContext
             ?: return SaveResultModel(false, null, "Vision's analysis: Context unavailable").toHashMap()
+
+        val fileName = name ?: System.currentTimeMillis().toString()
+        
+        // Check if file exists and skip if requested
+        if (skipIfExists) {
+            findExistingFile("jpg", fileName, customRelativePath)?.let { 
+                return it.toHashMap() 
+            }
+        }
 
         var fileUri: Uri? = null
         var fos: OutputStream? = null
         var success = false
 
         try {
-            fileUri = generateUri("jpg", name)
+            fileUri = generateUri("jpg", fileName, customRelativePath)
             if (fileUri != null) {
                 fos = context.contentResolver.openOutputStream(fileUri)
                 if (fos != null) {
@@ -212,14 +237,22 @@ class VisionGallerySaverPlugin : FlutterPlugin, MethodCallHandler {
                 }
             }
         } catch (e: IOException) {
-            return SaveResultModel(false, null, "Vision's analysis: ${e}").toHashMap()
+            return SaveResultModel(false, null, "Vision's analysis: ${e.message}").toHashMap()
         } finally {
-            fos?.close()
+            try {
+                fos?.close()
+            } catch (e: IOException) {
+                // Ignore close exception
+            }
             bmp.recycle()
         }
 
         return if (success) {
-            sendBroadcast(context, fileUri)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+                mediaScanIntent.data = fileUri
+                context.sendBroadcast(mediaScanIntent)
+            }
             SaveResultModel(true, fileUri.toString(), null).toHashMap()
         } else {
             SaveResultModel(false, null, "Vision's analysis: Save operation failed").toHashMap()
@@ -227,19 +260,31 @@ class VisionGallerySaverPlugin : FlutterPlugin, MethodCallHandler {
     }
 
     /**
-     * Saves any file (video, gif, etc.) to the gallery.
-     * 
-     * @param filePath The source file path
-     * @param name Optional custom filename
-     * @return HashMap<String, Any?> Result containing success status, file path, and any error message
+     * Saves any file to the gallery.
      */
-    private fun saveFileToGallery(filePath: String?, name: String?): HashMap<String, Any?> {
-        if (filePath == null) {
-            return SaveResultModel(false, null, "Vision's analysis: File path missing").toHashMap()
-        }
-
+    private fun saveFileToGallery(
+        filePath: String, 
+        name: String?,
+        skipIfExists: Boolean,
+        customRelativePath: String?
+    ): HashMap<String, Any?> {
         val context = applicationContext
             ?: return SaveResultModel(false, null, "Vision's analysis: Context unavailable").toHashMap()
+
+        val originalFile = File(filePath)
+        if (!originalFile.exists()) {
+            return SaveResultModel(false, null, "Vision's analysis: File not found at $filePath").toHashMap()
+        }
+
+        val fileName = name ?: originalFile.name
+        val extension = originalFile.extension
+        
+        // Check if file exists and skip if requested
+        if (skipIfExists) {
+            findExistingFile(extension, fileName, customRelativePath)?.let { 
+                return it.toHashMap() 
+            }
+        }
 
         var fileUri: Uri? = null
         var outputStream: OutputStream? = null
@@ -247,22 +292,17 @@ class VisionGallerySaverPlugin : FlutterPlugin, MethodCallHandler {
         var success = false
 
         try {
-            val originalFile = File(filePath)
-            if (!originalFile.exists()) {
-                return SaveResultModel(false, null, "Vision's analysis: File not found at $filePath").toHashMap()
-            }
-
-            fileUri = generateUri(originalFile.extension, name)
+            fileUri = generateUri(extension, fileName, customRelativePath)
             if (fileUri != null) {
                 outputStream = context.contentResolver.openOutputStream(fileUri)
                 if (outputStream != null) {
                     fileInputStream = FileInputStream(originalFile)
 
                     // Transfer the file in chunks to handle large files efficiently
-                    val buffer = ByteArray(10240)
-                    var count = 0
-                    while (fileInputStream.read(buffer).also { count = it } > 0) {
-                        outputStream.write(buffer, 0, count)
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (fileInputStream.read(buffer).also { bytesRead = it } > 0) {
+                        outputStream.write(buffer, 0, bytesRead)
                     }
 
                     outputStream.flush()
@@ -270,41 +310,73 @@ class VisionGallerySaverPlugin : FlutterPlugin, MethodCallHandler {
                 }
             }
         } catch (e: IOException) {
-            return SaveResultModel(false, null, "Vision's analysis: ${e}").toHashMap()
+            return SaveResultModel(false, null, "Vision's analysis: ${e.message}").toHashMap()
         } finally {
-            outputStream?.close()
-            fileInputStream?.close()
+            try {
+                outputStream?.close()
+                fileInputStream?.close()
+            } catch (e: IOException) {
+                // Ignore close exceptions
+            }
         }
 
         return if (success) {
-            sendBroadcast(context, fileUri)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+                mediaScanIntent.data = fileUri
+                context.sendBroadcast(mediaScanIntent)
+            }
             SaveResultModel(true, fileUri.toString(), null).toHashMap()
         } else {
             SaveResultModel(false, null, "Vision's analysis: Save operation failed").toHashMap()
         }
     }
-}
 
-/**
- * Data class to represent the result of save operations.
- * 
- * @property isSuccess Whether the operation was successful
- * @property filePath The path to the saved file (if successful)
- * @property errorMessage Any error message (if unsuccessful)
- */
-data class SaveResultModel(
-    var isSuccess: Boolean,
-    var filePath: String? = null,
-    var errorMessage: String? = null
-) {
     /**
-     * Converts the result to a HashMap for Flutter communication
+     * Generates a content URI for saving media files.
      */
-    fun toHashMap(): HashMap<String, Any?> {
-        return hashMapOf(
-            "isSuccess" to isSuccess,
-            "filePath" to filePath,
-            "errorMessage" to errorMessage
-        )
+    private fun generateUri(extension: String, name: String, customRelativePath: String? = null): Uri? {
+        val fileName = MediaStoreUtils.ensureExtension(name, extension)
+        val mimeType = MediaStoreUtils.getMIMEType(extension)
+        
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10 (Q) and above: Use MediaStore
+            val directoryType = MediaStoreUtils.getDirectoryType(mimeType)
+            val relativePath = MediaStoreUtils.buildRelativePath(directoryType, customRelativePath)
+            
+            val contentUri = when {
+                MediaStoreUtils.isMediaType(mimeType, "video/") -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                MediaStoreUtils.isMediaType(mimeType, "audio/") -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                else -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                if (mimeType != null) {
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                }
+            }
+
+            applicationContext?.contentResolver?.insert(contentUri, values)
+        } else {
+            // Below Android 10: Use file system directly
+            val directoryType = MediaStoreUtils.getDirectoryType(mimeType)
+            val storePath = Environment.getExternalStoragePublicDirectory(directoryType).absolutePath
+            
+            // Create custom subfolder if specified
+            val baseDir = if (customRelativePath.isNullOrEmpty()) {
+                File(storePath)
+            } else {
+                File(storePath, customRelativePath).apply {
+                    if (!exists()) {
+                        mkdirs()
+                    }
+                }
+            }
+            
+            val file = File(baseDir, fileName)
+            Uri.fromFile(file)
+        }
     }
 }

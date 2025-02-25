@@ -9,7 +9,7 @@ import 'package:vision_gallery_saver/vision_gallery_saver.dart';
 import 'package:path_provider/path_provider.dart';
 
 void main() {
-  debugPrint('App starting...');
+  debugPrint('Starting Vision Gallery Saver Example App');
   runApp(const MyApp());
 }
 
@@ -19,10 +19,10 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Avengers Gallery Saver',
+      title: 'Vision Gallery Saver',
       theme: ThemeData(
-        primarySwatch: Colors.red,
-        scaffoldBackgroundColor: Colors.grey[100],
+        primarySwatch: Colors.blue,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
       home: const MyHomePage(),
     );
@@ -39,99 +39,143 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final GlobalKey _globalKey = GlobalKey();
   String _lastSavedPath = '';
+  bool _saveInProgress = false;
 
   @override
   void initState() {
     super.initState();
-    debugPrint('MyHomePage initialized');
+    debugPrint('Vision Gallery Saver HomePage initialized');
   }
 
   void _showSaveResult(Map<dynamic, dynamic> result) {
-    debugPrint('Save result received: $result');
+    debugPrint('Save result: $result');
 
     if (result['isSuccess']) {
-      String? filePath = result['filePath'];
-      debugPrint('File saved at path: $filePath');
+      String? filePath = result['filePath'] ?? result['existingFilePath'];
 
       if (filePath != null && filePath.isNotEmpty) {
         setState(() {
           _lastSavedPath = filePath;
         });
 
-        if (Platform.isAndroid) {
-          String galleryPath = '/storage/emulated/0/Pictures';
-          debugPrint('Android gallery path: $galleryPath');
+        if (result['foundExistingFile'] == true) {
+          debugPrint('File already exists at: $filePath');
+        } else {
+          debugPrint('Successfully saved file to: $filePath');
         }
 
-        if (Platform.isIOS) {
-          debugPrint('File saved to iOS Photos app');
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['foundExistingFile'] == true
+                ? 'File already exists: ${filePath.split('/').last}'
+                : 'Saved successfully!'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
       }
     } else {
-      debugPrint('Save failed: ${result['errorMessage']}');
+      debugPrint('Save operation failed: ${result['errorMessage']}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save: ${result['errorMessage']}'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            result['isSuccess'] ? 'Saved successfully!' : 'Failed to save')));
+    setState(() {
+      _saveInProgress = false;
+    });
   }
 
-  _saveShieldImage() async {
-    debugPrint('Starting to save shield image...');
+  Future<void> _saveShieldImage({bool skipIfExists = false}) async {
+    if (_saveInProgress) {
+      debugPrint('Save operation already in progress. Ignoring request.');
+      return;
+    }
+
+    setState(() {
+      _saveInProgress = true;
+    });
+
+    debugPrint('Starting Shield image save...');
+    debugPrint('skipIfExists: $skipIfExists');
+
     try {
-      RenderRepaintBoundary boundary =
-          _globalKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-      debugPrint('Got render boundary');
+      debugPrint('Rendering RepaintBoundary to image');
+      RenderRepaintBoundary boundary = _globalKey.currentContext!
+          .findRenderObject() as RenderRepaintBoundary;
 
-      ui.Image image = await boundary.toImage();
-      debugPrint('Converted boundary to image');
+      debugPrint('Converting boundary to high-resolution image (3.0x)');
+      ui.Image image = await boundary.toImage(pixelRatio: 3.0);
 
+      debugPrint('Converting image to PNG byte data');
       ByteData? byteData =
           await image.toByteData(format: ui.ImageByteFormat.png);
-      debugPrint('Converted image to byte data. Null? ${byteData == null}');
 
       if (byteData != null) {
-        final filename =
-            "captain_america_shield_${DateTime.now().millisecondsSinceEpoch}";
-        debugPrint('Saving shield with filename: $filename');
+        debugPrint('Byte data received, size: ${byteData.lengthInBytes} bytes');
+        debugPrint(
+            'Saving shield image to gallery with custom subfolder "Pictures/Avengers/Shields"');
 
         final result = await VisionGallerySaver.saveImage(
           byteData.buffer.asUint8List(),
           quality: 100,
-          name: filename,
+          name: "captain_america_shield",
           isReturnImagePathOfIOS: true,
+          skipIfExists: skipIfExists,
+          androidRelativePath: "Pictures/Avengers/Shields",
         );
-        debugPrint('Shield save result: $result');
+
         _showSaveResult(result);
+      } else {
+        debugPrint('Failed to get byte data from image');
+        _showSaveResult({
+          'isSuccess': false,
+          'errorMessage': 'Failed to convert image to bytes'
+        });
       }
     } catch (e, stackTrace) {
-      debugPrint('Error saving shield: $e');
+      debugPrint('Error saving shield image: $e');
       debugPrint('Stack trace: $stackTrace');
       _showSaveResult({'isSuccess': false, 'errorMessage': e.toString()});
     }
   }
 
-  _saveIronManImage() async {
-    debugPrint('Starting to download Iron Man image...');
+  Future<void> _saveIronManImage() async {
+    if (_saveInProgress) {
+      debugPrint('Save operation already in progress. Ignoring request.');
+      return;
+    }
+
+    setState(() {
+      _saveInProgress = true;
+    });
+
+    debugPrint('Starting Iron Man image download and save...');
+
     try {
+      debugPrint('Downloading Iron Man image from network URL');
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Downloading Iron Man image...")));
 
-      debugPrint('Fetching from URL: https://i.imgur.com/XcDD7mg.jpeg');
+      debugPrint(
+          'Fetching image data from URL: https://i.imgur.com/XcDD7mg.jpeg');
       var response = await Dio().get("https://i.imgur.com/XcDD7mg.jpeg",
           options: Options(responseType: ResponseType.bytes));
-      debugPrint('Image downloaded, size: ${response.data.length} bytes');
+      debugPrint('Download complete, received ${response.data.length} bytes');
 
-      final filename = "iron_man_${DateTime.now().millisecondsSinceEpoch}";
-      debugPrint('Saving with filename: $filename');
-
+      debugPrint(
+          'Saving Iron Man image to gallery with custom subfolder "Pictures/Avengers/Characters"');
       final result = await VisionGallerySaver.saveImage(
         Uint8List.fromList(response.data),
         quality: 100,
-        name: filename,
+        name: "iron_man",
         isReturnImagePathOfIOS: true,
+        skipIfExists: false,
+        androidRelativePath: "Pictures/Avengers/Characters",
       );
-      debugPrint('Iron Man save result: $result');
+
       _showSaveResult(result);
     } catch (e, stackTrace) {
       debugPrint('Error saving Iron Man image: $e');
@@ -140,38 +184,49 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  _saveThorGif() async {
-    debugPrint('Starting to download Thor image...');
+  Future<void> _saveThorGif({bool skipIfExists = false}) async {
+    if (_saveInProgress) {
+      debugPrint('Save operation already in progress. Ignoring request.');
+      return;
+    }
+
+    setState(() {
+      _saveInProgress = true;
+    });
+
+    debugPrint('Starting Thor image download and save...');
+    debugPrint('skipIfExists: $skipIfExists');
+
     try {
+      debugPrint('Getting temporary directory for download');
+      var appDocDir = await getTemporaryDirectory();
+      String savePath = "${appDocDir.path}/thor.gif";
+      debugPrint('Temp file path: $savePath');
+
+      debugPrint(
+          'Downloading Thor image from URL: https://i.imgur.com/yeg063e.jpeg');
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Downloading Thor image...")));
 
-      var appDocDir = await getTemporaryDirectory();
-      String savePath = "${appDocDir.path}/thor.gif";
-      debugPrint('Temporary save path: $savePath');
+      await Dio().download("https://i.imgur.com/yeg063e.jpeg", savePath);
+      debugPrint('Download complete, saved to temporary location');
 
-      String fileUrl = "https://i.imgur.com/yeg063e.jpeg";
-      debugPrint('Downloading from URL: $fileUrl');
-
-      await Dio().download(fileUrl, savePath);
-      debugPrint('File downloaded to temp location');
-
-      final filename = "thor_${DateTime.now().millisecondsSinceEpoch}";
+      debugPrint(
+          'Saving Thor image to gallery with custom subfolder "Pictures/Avengers/Characters"');
       final result = await VisionGallerySaver.saveFile(
         savePath,
-        name: filename,
+        name: "thor",
         isReturnPathOfIOS: true,
+        skipIfExists: skipIfExists,
+        androidRelativePath: "Pictures/Avengers/Characters",
       );
-      debugPrint('Thor save result: $result');
-      _showSaveResult(result);
 
       // Clean up temp file
-      try {
-        File(savePath).deleteSync();
-        debugPrint('Temporary file cleaned up successfully');
-      } catch (e) {
-        debugPrint('Error cleaning up temp file: $e');
-      }
+      debugPrint('Deleting temporary file');
+      await File(savePath).delete();
+      debugPrint('Temporary file deleted');
+
+      _showSaveResult(result);
     } catch (e, stackTrace) {
       debugPrint('Error saving Thor image: $e');
       debugPrint('Stack trace: $stackTrace');
@@ -179,43 +234,54 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  _saveEndgameTrailer() async {
-    debugPrint('Starting to download Endgame trailer...');
+  Future<void> _saveEndgameTrailer() async {
+    if (_saveInProgress) {
+      debugPrint('Save operation already in progress. Ignoring request.');
+      return;
+    }
+
+    setState(() {
+      _saveInProgress = true;
+    });
+
+    debugPrint('Starting Endgame trailer download and save...');
+
     try {
+      debugPrint('Getting temporary directory for download');
+      var appDocDir = await getTemporaryDirectory();
+      String savePath = "${appDocDir.path}/endgame.mp4";
+      debugPrint('Temp file path: $savePath');
+
+      debugPrint(
+          'Downloading Endgame trailer from URL: https://i.imgur.com/68NpINq.mp4');
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Downloading Endgame trailer...")));
 
-      var appDocDir = await getTemporaryDirectory();
-      String savePath = "${appDocDir.path}/endgame.mp4";
-      debugPrint('Temporary save path: $savePath');
-
-      String fileUrl = "https://i.imgur.com/68NpINq.mp4";
-      debugPrint('Downloading from URL: $fileUrl');
-
-      await Dio().download(fileUrl, savePath, onReceiveProgress: (count, total) {
+      await Dio().download("https://i.imgur.com/68NpINq.mp4", savePath,
+          onReceiveProgress: (received, total) {
         if (total != -1) {
-          final progress = (count / total * 100).toStringAsFixed(0);
+          final progress = (received / total * 100).toStringAsFixed(0);
           debugPrint('Download progress: $progress%');
         }
       });
-      debugPrint('Video downloaded to temp location');
+      debugPrint('Download complete, saved to temporary location');
 
-      final filename = "endgame_${DateTime.now().millisecondsSinceEpoch}";
+      debugPrint(
+          'Saving Endgame trailer to gallery with custom subfolder "Movies/Avengers/Trailers"');
       final result = await VisionGallerySaver.saveFile(
         savePath,
-        name: filename,
+        name: "endgame_trailer",
         isReturnPathOfIOS: true,
+        skipIfExists: false,
+        androidRelativePath: "Movies/Avengers/Trailers",
       );
-      debugPrint('Endgame trailer save result: $result');
-      _showSaveResult(result);
 
       // Clean up temp file
-      try {
-        File(savePath).deleteSync();
-        debugPrint('Temporary file cleaned up successfully');
-      } catch (e) {
-        debugPrint('Error cleaning up temp file: $e');
-      }
+      debugPrint('Deleting temporary file');
+      await File(savePath).delete();
+      debugPrint('Temporary file deleted');
+
+      _showSaveResult(result);
     } catch (e, stackTrace) {
       debugPrint('Error saving Endgame trailer: $e');
       debugPrint('Stack trace: $stackTrace');
@@ -227,70 +293,101 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Avengers Gallery Saver"),
+        title: const Text('Vision Gallery Saver'),
       ),
-      body: Center(
-        child: Column(
-          children: <Widget>[
-            const SizedBox(height: 20),
-            RepaintBoundary(
-              key: _globalKey,
-              child: Container(
-                alignment: Alignment.center,
-                width: 300,
-                height: 300,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [Colors.red, Colors.white, Colors.blue],
-                    stops: [0.2, 0.5, 0.8],
+      body: SingleChildScrollView(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Circular Shield Image
+                RepaintBoundary(
+                  key: _globalKey,
+                  child: Container(
+                    width: 250,
+                    height: 250,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [Colors.blue, Colors.white, Colors.red],
+                        stops: [0.2, 0.5, 0.8],
+                      ),
+                    ),
+                    child: const Icon(Icons.shield,
+                        size: 150, color: Colors.white),
                   ),
                 ),
-                child: const Icon(Icons.shield, size: 150, color: Colors.white),
-              ),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _saveShieldImage,
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(250, 50),
-              ),
-              child: const Text("Save Captain's Shield"),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: _saveIronManImage,
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(250, 50),
-              ),
-              child: const Text("Save Iron Man Image"),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: _saveThorGif,
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(250, 50),
-              ),
-              child: const Text("Save Thor Image"),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: _saveEndgameTrailer,
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(250, 50),
-              ),
-              child: const Text("Save Endgame Trailer"),
-            ),
-            if (_lastSavedPath.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Text(
-                  "Last saved at:\n$_lastSavedPath",
-                  style: const TextStyle(fontSize: 12),
-                  textAlign: TextAlign.center,
+                const SizedBox(height: 20),
+
+                // Buttons Section
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    // Shield Buttons
+                    ElevatedButton(
+                      onPressed: _saveInProgress ? null : _saveShieldImage,
+                      child: const Text('Save Shield'),
+                    ),
+                    ElevatedButton(
+                      onPressed: _saveInProgress
+                          ? null
+                          : () => _saveShieldImage(skipIfExists: true),
+                      child: const Text('Save Shield (Skip if Exists)'),
+                    ),
+
+                    // Iron Man Button
+                    ElevatedButton(
+                      onPressed: _saveInProgress ? null : _saveIronManImage,
+                      child: const Text('Save Iron Man'),
+                    ),
+
+                    // Thor Button
+                    ElevatedButton(
+                      onPressed: _saveInProgress ? null : _saveThorGif,
+                      child: const Text('Save Thor'),
+                    ),
+
+                    // Endgame Trailer Button
+                    ElevatedButton(
+                      onPressed: _saveInProgress ? null : _saveEndgameTrailer,
+                      child: const Text('Save Endgame Trailer'),
+                    ),
+                  ],
                 ),
-              ),
-          ],
+
+                // Show Loading Indicator
+                if (_saveInProgress)
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: CircularProgressIndicator(),
+                  ),
+
+                // Show Last Saved Path
+                if (_lastSavedPath.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      children: [
+                        const Text(
+                          'Last saved at:',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _lastSavedPath,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
