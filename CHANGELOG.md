@@ -1,3 +1,7 @@
+## 3.0.0
+
+* Migrated package to EnsembleUI organization
+
 ## 2.0.0
 
 * Added support for custom subfolder organization on Android
