@@ -1,3 +1,7 @@
+## 3.1.0
+
+* Removed unnecessary permissions on Android
+
 ## 3.0.0
 
 * Migrated package to EnsembleUI organization
