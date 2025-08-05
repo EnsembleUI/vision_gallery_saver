@@ -45,3 +45,5 @@ example/.idea
 example/pubspec.lock
 example/.pub/
 example/*.iml
+config.bat
+node_modules
