@@ -4,13 +4,13 @@ Thank you for your interest in contributing to Vision Gallery Saver! Here's how 
 
 ## Reporting Bugs
 
-- Check if the bug has already been reported in the [Issues](https://github.com/TheNoumanDev/vision_gallery_saver/issues).
+- Check if the bug has already been reported in the [Issues](https://github.com/EnsembleUI/vision_gallery_saver/issues).
 - If not, create a new issue with a descriptive title and detailed information.
 - Include steps to reproduce, expected behavior, actual behavior, and environment details.
 
 ## Suggesting Features
 
-- Check if the feature has already been suggested in the [Issues](https://github.com/TheNoumanDev/vision_gallery_saver/issues).
+- Check if the feature has already been suggested in the [Issues](https://github.com/EnsembleUI/vision_gallery_saver/issues).
 - If not, create a new issue with the tag [Feature Request].
 - Explain why the feature would be useful and how it should work.
 

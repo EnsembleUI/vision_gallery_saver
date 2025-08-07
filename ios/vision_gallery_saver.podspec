@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   s.description      = <<-DESC
 Vision Gallery Saver allows saving images and videos to device gallery with advanced features.
                        DESC
-  s.homepage         = 'https://github.com/thenoumandev/vision_gallery_saver'
+  s.homepage         = 'https://github.com/EnsembleUI/vision_gallery_saver'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Your Name' => 'thenoumandev@gmail.com' }
   s.source           = { :path => '.' }

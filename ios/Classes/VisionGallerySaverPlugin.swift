@@ -175,8 +175,8 @@ public class SwiftVisionGallerySaverPlugin: NSObject, FlutterPlugin {
                     "isSuccess": true,
                     "foundExistingFile": true,
                     "existingFilePath": urlStr,
-                    "filePath": nil,
-                    "errorMessage": nil
+                    "filePath": NSNull(),
+                    "errorMessage": NSNull()
                 ]
                 self.result?(result)
             } else {
